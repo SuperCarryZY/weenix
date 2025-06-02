@@ -159,7 +159,18 @@ void sched_init(void)
  */
 long sched_cancellable_sleep_on(ktqueue_t *queue)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_cancellable_sleep_on");
+    if (curthr->kt_cancelled) {
+        return -EINTR;
+    }
+    
+    curthr->kt_state = KT_SLEEP_CANCELLABLE;
+    
+    sched_switch(queue);
+    
+    if (curthr->kt_cancelled) {
+        return -EINTR;
+    }
+    
     return 0;
 }
 
@@ -171,7 +182,12 @@ long sched_cancellable_sleep_on(ktqueue_t *queue)
  */
 void sched_cancel(kthread_t *thr)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_cancel");
+    thr->kt_cancelled = 1;
+    
+    if (thr->kt_state == KT_SLEEP_CANCELLABLE && thr->kt_wchan) {
+        ktqueue_remove(thr->kt_wchan, thr);
+        sched_make_runnable(thr);
+    }
 }
 
 /*
@@ -210,7 +226,19 @@ void sched_cancel(kthread_t *thr)
  */
 void sched_switch(ktqueue_t *queue)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_switch");
+    KASSERT(curthr->kt_state != KT_ON_CPU && "Current thread state must not be KT_ON_CPU");
+    
+    intr_disable();
+    uint8_t old_ipl = intr_setipl(IPL_LOW);
+    
+    curcore.kc_queue = queue;
+    
+    last_thread_context = &curthr->kt_ctx;
+    
+    context_switch(&curthr->kt_ctx, &curcore.kc_ctx);
+    
+    intr_setipl(old_ipl);
+    intr_enable();
 }
 
 /*
@@ -236,7 +264,15 @@ void sched_yield()
  */
 void sched_make_runnable(kthread_t *thr)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_make_runnable");
+    KASSERT(thr != curthr && "Cannot make the current thread runnable");
+    KASSERT(thr->kt_state != KT_ON_CPU && "Thread is already running");
+    
+    uint8_t old_ipl = intr_setipl(IPL_HIGH);
+    
+    thr->kt_state = KT_RUNNABLE;
+    ktqueue_enqueue(&kt_runq, thr);
+    
+    intr_setipl(old_ipl);
 }
 
 /*
@@ -254,7 +290,13 @@ void sched_make_runnable(kthread_t *thr)
  */
 void sched_sleep_on(ktqueue_t *q)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_sleep_on");
+    uint8_t old_ipl = intr_setipl(IPL_HIGH);
+    
+    curthr->kt_state = KT_SLEEP;
+    
+    sched_switch(q);
+    
+    intr_setipl(old_ipl);
 }
 
 /*
@@ -270,7 +312,17 @@ void sched_sleep_on(ktqueue_t *q)
  */
 void sched_wakeup_on(ktqueue_t *q, kthread_t **ktp)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_wakeup_on");
+    if (sched_queue_empty(q)) {
+        return;
+    }
+    
+    kthread_t *thr = ktqueue_dequeue(q);
+    
+    if (ktp) {
+        *ktp = thr;
+    }
+    
+    sched_make_runnable(thr);
 }
 
 /*
@@ -278,7 +330,10 @@ void sched_wakeup_on(ktqueue_t *q, kthread_t **ktp)
  */
 void sched_broadcast_on(ktqueue_t *q)
 {
-    NOT_YET_IMPLEMENTED("PROCS: sched_broadcast_on");
+    while (!sched_queue_empty(q)) {
+        kthread_t *thr = ktqueue_dequeue(q);
+        sched_make_runnable(thr);
+    }
 }
 
 /*

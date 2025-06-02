@@ -1,6 +1,7 @@
 #include "errno.h"
 #include "globals.h"
 #include "types.h"
+#include "kernel.h"
 #include <api/exec.h>
 #include <drivers/screen.h>
 #include <drivers/tty/tty.h>
@@ -33,6 +34,7 @@
 #include "fs/vnode.h"
 
 #include "test/driverstest.h"
+#include "test/proctest.h"
 
 #include "util/btree.h"
 
@@ -159,7 +161,24 @@ static void *initproc_run(long arg1, void *arg2)
     make_devices();
 #endif
 
-    NOT_YET_IMPLEMENTED("PROCS: initproc_run");
+    dbg(DBG_INIT, "Init process started\n");
+
+    proctest_main(0, NULL);
+    
+    /* TODO: Add your其他 tests here for PROCS */
+    
+#ifdef __DRIVERS__
+    /* After drivers are done, start kshells here */
+#endif
+
+    /* Wait for all children to exit */
+    while (!list_empty(&curproc->p_children)) {
+        int status;
+        pid_t child = do_waitpid(-1, &status, 0);
+        if (child > 0) {
+            dbg(DBG_INIT, "Child process %d exited with status %d\n", child, status);
+        }
+    }
 
     return NULL;
 }
@@ -178,7 +197,18 @@ static void *initproc_run(long arg1, void *arg2)
  */
 void initproc_start()
 {
-    NOT_YET_IMPLEMENTED("PROCS: initproc_start");
+    proc_t *init_proc = proc_create("init");
+    KASSERT(init_proc && "Failed to create init process");
+    KASSERT(init_proc->p_pid == PID_INIT && "Init process should have PID 1");
+    
+    kthread_t *init_thread = kthread_create(init_proc, initproc_run, 0, NULL);
+    KASSERT(init_thread && "Failed to create init thread");
+    
+    sched_make_runnable(init_thread);
+    
+    GDB_CALL_HOOK(initialized);
+    
+    context_make_active(&curcore.kc_ctx);
 }
 
 void initproc_finish()

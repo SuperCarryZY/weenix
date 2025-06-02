@@ -67,8 +67,43 @@ void kthread_init()
 kthread_t *kthread_create(proc_t *proc, kthread_func_t func, long arg1,
                           void *arg2)
 {
-    NOT_YET_IMPLEMENTED("PROCS: kthread_create");
-    return NULL;
+
+    kthread_t *new_thread = slab_obj_alloc(kthread_allocator);
+    if (!new_thread) {
+        return NULL;
+    }
+
+
+    char *stack = alloc_stack();
+    if (!stack) {
+        slab_obj_free(kthread_allocator, new_thread);
+        return NULL;
+    }
+
+    new_thread->kt_kstack = stack;
+    new_thread->kt_retval = NULL;
+    new_thread->kt_errno = 0;
+    new_thread->kt_proc = proc;
+    new_thread->kt_cancelled = 0;
+    new_thread->kt_wchan = NULL;
+    new_thread->kt_state = KT_NO_STATE; 
+    new_thread->kt_preemption_count = 0;
+
+
+    list_link_init(&new_thread->kt_plink);
+    list_link_init(&new_thread->kt_qlink);
+    
+
+    list_init(&new_thread->kt_mutexes);
+
+
+    context_setup(&new_thread->kt_ctx, func, arg1, arg2, 
+                  stack, DEFAULT_STACK_SIZE, proc->p_pml4);
+
+
+    list_insert_tail(&proc->p_threads, &new_thread->kt_plink);
+
+    return new_thread;
 }
 
 /*
@@ -123,7 +158,11 @@ void kthread_destroy(kthread_t *thr)
  */
 void kthread_cancel(kthread_t *thr, void *retval)
 {
-    NOT_YET_IMPLEMENTED("PROCS: kthread_cancel");
+    KASSERT(thr != curthr && "Cannot cancel the current thread");
+    
+    thr->kt_retval = retval;
+    
+    sched_cancel(thr);
 }
 
 /*
@@ -131,5 +170,5 @@ void kthread_cancel(kthread_t *thr, void *retval)
  */
 void kthread_exit(void *retval)
 {
-    NOT_YET_IMPLEMENTED("PROCS: kthread_exit");
+    proc_thread_exiting(retval);
 }
