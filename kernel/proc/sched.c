@@ -332,7 +332,9 @@ void sched_broadcast_on(ktqueue_t *q)
 {
     while (!sched_queue_empty(q)) {
         kthread_t *thr = ktqueue_dequeue(q);
-        sched_make_runnable(thr);
+        if (!thr->kt_cancelled) {
+            sched_make_runnable(thr);
+        }
     }
 }
 
@@ -353,11 +355,14 @@ void core_switch()
 {
     while (1)
     {
+        dbg(DBG_THR, "核心切换循环开始: curthr=%p, curproc=%p\n", curthr, curproc);
+        
         KASSERT(!intr_enabled());
         KASSERT(!curthr || curthr->kt_state != KT_ON_CPU);
 
         if (curcore.kc_queue)
         {
+            dbg(DBG_THR, "将当前线程加入队列: curthr=%p, state=%d\n", curthr, curthr ? curthr->kt_state : -1);
             ktqueue_enqueue(curcore.kc_queue, curthr);
         }
 
@@ -372,18 +377,17 @@ void core_switch()
             if (next_thread)
                 break;
 
+            dbg(DBG_THR, "等待可运行线程\n");
             intr_wait();
             intr_disable();
         }
 
+        dbg(DBG_THR, "选择下一个线程: proc=%d, state=%d\n", next_thread->kt_proc->p_pid, next_thread->kt_state);
+
         KASSERT(next_thread->kt_state == KT_RUNNABLE);
         KASSERT(next_thread->kt_proc);
 
-        // if (curcore.kc_id != next_thread->kt_recent_core)
-        // {
         map_in_core_specific_data(next_thread->kt_ctx.c_pml4);
-            // next_thread->kt_recent_core = curcore.kc_id;
-        // }
 
         uintptr_t mapped_paddr = pt_virt_to_phys_helper(
             next_thread->kt_ctx.c_pml4, (uintptr_t)&next_thread);
@@ -394,6 +398,10 @@ void core_switch()
         curthr = next_thread;
         curthr->kt_state = KT_ON_CPU;
         curproc = curthr->kt_proc;
+        
+        dbg(DBG_THR, "切换到新线程: proc=%d, state=%d\n", curproc->p_pid, curthr->kt_state);
         context_switch(&curcore.kc_ctx, &curthr->kt_ctx);
+        
+        dbg(DBG_THR, "核心切换完成: curthr=%p, curproc=%p\n", curthr, curproc);
     }
 }

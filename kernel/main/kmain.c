@@ -86,11 +86,13 @@ static init_func_t init_funcs[] = {
  */
 void kmain()
 {
+    dbg(DBG_CORE, "kmain 开始\n");
     GDB_CALL_HOOK(boot);
 
     for (size_t i = 0; i < sizeof(init_funcs) / sizeof(init_funcs[0]); i++)
         init_funcs[i]();
 
+    dbg(DBG_CORE, "kmain 初始化完成，准备启动 initproc\n");
     initproc_start();
     panic("\nReturned to kmain()\n");
 }
@@ -155,6 +157,7 @@ static void make_devices()
  */
 static void *initproc_run(long arg1, void *arg2)
 {
+    dbg(DBG_CORE, "initproc_run 开始\n");
 #ifdef __VFS__
     dbg(DBG_INIT, "Initializing VFS...\n");
     vfs_init();
@@ -180,6 +183,7 @@ static void *initproc_run(long arg1, void *arg2)
         }
     }
 
+    dbg(DBG_CORE, "initproc_run 结束\n");
     return NULL;
 }
 
@@ -197,6 +201,7 @@ static void *initproc_run(long arg1, void *arg2)
  */
 void initproc_start()
 {
+    dbg(DBG_CORE, "initproc_start 开始\n");
     proc_t *init_proc = proc_create("init");
     KASSERT(init_proc && "Failed to create init process");
     KASSERT(init_proc->p_pid == PID_INIT && "Init process should have PID 1");
@@ -209,6 +214,7 @@ void initproc_start()
     GDB_CALL_HOOK(initialized);
     
     context_make_active(&curcore.kc_ctx);
+    dbg(DBG_CORE, "initproc_start 结束\n");
 }
 
 void initproc_finish()

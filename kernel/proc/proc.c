@@ -54,8 +54,10 @@ static proc_t *proc_initproc = NULL;
  */
 void proc_init()
 {
+    dbg(DBG_PROC, "proc_init 开始\n");
     proc_allocator = slab_allocator_create("proc", sizeof(proc_t));
     KASSERT(proc_allocator);
+    dbg(DBG_PROC, "proc_init 结束\n");
 }
 
 /*
@@ -172,18 +174,21 @@ proc_t *proc_lookup(pid_t pid)
  */
 proc_t *proc_create(const char *name)
 {
-
+    dbg(DBG_PROC, "开始创建进程: %s\n", name);
+    
     pid_t pid = _proc_getid();
     if (pid < 0) {
+        dbg(DBG_PROC, "获取PID失败\n");
         return NULL;  
     }
+    dbg(DBG_PROC, "分配PID: %d\n", pid);
 
- 
     proc_t *proc = slab_obj_alloc(proc_allocator);
     if (!proc) {
+        dbg(DBG_PROC, "分配进程结构体失败\n");
         return NULL;
     }
-
+    dbg(DBG_PROC, "成功分配进程结构体\n");
 
     proc->p_pid = pid;
     strncpy(proc->p_name, name, PROC_NAME_LEN);
@@ -273,7 +278,7 @@ proc_t *proc_create(const char *name)
         proc_initproc = proc;
     }
 
-    dbg(DBG_PROC, "created process %d (%s)\n", proc->p_pid, proc->p_name);
+    dbg(DBG_PROC, "进程创建完成: pid=%d, name=%s\n", proc->p_pid, proc->p_name);
 
     return proc;
 }
@@ -297,23 +302,19 @@ proc_t *proc_create(const char *name)
  */
 void proc_cleanup(long status)
 {
-
     curproc->p_status = status;
     curproc->p_state = PROC_DEAD;
-
 
     if (curproc->p_pid == PID_INIT) {
         initproc_finish();
         return;
     }
 
-    
+    // 将子进程转移给 init 进程
     list_iterate(&curproc->p_children, child, proc_t, p_child_link) {
-  
         child->p_pproc = proc_initproc;
     }
     
-   
     while (!list_empty(&curproc->p_children)) {
         proc_t *child = list_head(&curproc->p_children, proc_t, p_child_link);
         list_remove(&child->p_child_link);
@@ -321,14 +322,12 @@ void proc_cleanup(long status)
     }
 
 #ifdef __VFS__
-
     for (int i = 0; i < NFILES; i++) {
         if (curproc->p_files[i]) {
             fput(curproc->p_files + i);
             curproc->p_files[i] = NULL;
         }
     }
-    
 
     if (curproc->p_cwd) {
         vput(&curproc->p_cwd);
@@ -337,16 +336,12 @@ void proc_cleanup(long status)
 #endif
 
 #ifdef __VM__
-
 #endif
 
-
-    if (curproc->p_pproc) {
-        list_remove(&curproc->p_child_link);
-    }
-
-    dbg(DBG_PROC, "process %d (%s) cleaned up with status %ld\n", 
-        curproc->p_pid, curproc->p_name, status);
+    // 不要在这里移除自己，让 do_waitpid 负责
+    // if (curproc->p_pproc) {
+    //     list_remove(&curproc->p_child_link);
+    // }
 }
 
 /*
@@ -365,23 +360,23 @@ void proc_cleanup(long status)
  */
 void proc_thread_exiting(void *retval)
 {
+    dbg(DBG_PROC, "开始处理线程退出: proc=%d\n", curproc->p_pid);
     
     proc_cleanup((long)retval);
-    
-    
+    dbg(DBG_PROC, "进程清理完成\n");
     
     curthr->kt_state = KT_EXITED;
     curthr->kt_retval = retval;
+    dbg(DBG_PROC, "设置线程状态为已退出\n");
     
-
     if (curproc->p_pproc) {
+        dbg(DBG_PROC, "通知父进程: pid=%d\n", curproc->p_pproc->p_pid);
         sched_broadcast_on(&curproc->p_pproc->p_wait);
     }
     
-
+    dbg(DBG_PROC, "准备切换上下文\n");
     sched_switch(NULL);
     
-
     panic("proc_thread_exiting: returned from sched_switch\n");
 }
 
@@ -431,6 +426,8 @@ void proc_kill_all()
  */
 void proc_destroy(proc_t *proc)
 {
+    dbg(DBG_PROC, "开始销毁进程: pid=%d, name=%s\n", proc->p_pid, proc->p_name);
+
     list_remove(&proc->p_list_link);
 
     list_iterate(&proc->p_threads, thr, kthread_t, kt_plink)
@@ -461,6 +458,8 @@ void proc_destroy(proc_t *proc)
     pt_destroy(proc->p_pml4);
 
     slab_obj_free(proc_allocator, proc);
+
+    dbg(DBG_PROC, "进程销毁完成: pid=%d\n", proc->p_pid);
 }
 
 /*=============
@@ -493,62 +492,80 @@ void proc_destroy(proc_t *proc)
  */
 pid_t do_waitpid(pid_t pid, int *status, int options)
 {
+    dbg(DBG_PROC, "开始等待进程: pid=%d\n", pid);
+    
     if (pid == 0 || (pid < -1) || options != 0) {
+        dbg(DBG_PROC, "不支持的参数: pid=%d, options=%d\n", pid, options);
         return -ENOTSUP;
     }
     
     if (list_empty(&curproc->p_children)) {
+        dbg(DBG_PROC, "当前进程没有子进程\n");
         return -ECHILD;
     }
     
     proc_t *child_to_wait = NULL;
     
     if (pid > 0) {
+        dbg(DBG_PROC, "等待特定子进程: pid=%d\n", pid);
         list_iterate(&curproc->p_children, child, proc_t, p_child_link) {
             if (child->p_pid == pid) {
                 child_to_wait = child;
+                dbg(DBG_PROC, "找到要等待的子进程\n");
                 break;
             }
         }
         
         if (!child_to_wait) {
+            dbg(DBG_PROC, "未找到指定的子进程\n");
             return -ECHILD;
         }
+    } else {
+        dbg(DBG_PROC, "等待任意子进程退出\n");
     }
     
     while (1) {
         if (pid > 0) {
             if (child_to_wait->p_state == PROC_DEAD) {
+                dbg(DBG_PROC, "目标子进程已退出: pid=%d\n", child_to_wait->p_pid);
                 pid_t child_pid = child_to_wait->p_pid;
                 
                 if (status) {
                     *status = child_to_wait->p_status;
+                    dbg(DBG_PROC, "子进程退出状态: %d\n", *status);
                 }
                 
                 list_remove(&child_to_wait->p_child_link);
+                dbg(DBG_PROC, "从子进程列表中移除\n");
                 
                 proc_destroy(child_to_wait);
+                dbg(DBG_PROC, "销毁子进程\n");
                 
                 return child_pid;
             }
         } else {
             list_iterate(&curproc->p_children, child, proc_t, p_child_link) {
                 if (child->p_state == PROC_DEAD) {
+                    dbg(DBG_PROC, "发现已退出的子进程: pid=%d\n", child->p_pid);
                     pid_t child_pid = child->p_pid;
                     
                     if (status) {
                         *status = child->p_status;
+                        dbg(DBG_PROC, "子进程退出状态: %d\n", *status);
                     }
                     
                     list_remove(&child->p_child_link);
+                    dbg(DBG_PROC, "从子进程列表中移除\n");
                     
                     proc_destroy(child);
+                    dbg(DBG_PROC, "销毁子进程\n");
                     
                     return child_pid;
                 }
             }
         }
         
+        dbg(DBG_PROC, "等待子进程退出...\n");
         sched_sleep_on(&curproc->p_wait);
     }
 }

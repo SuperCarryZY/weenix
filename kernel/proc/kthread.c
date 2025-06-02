@@ -64,15 +64,12 @@ void kthread_init()
  * Initialize the thread's kt_state to KT_NO_STATE
  * Initialize the thread's kt_recent_core to ~0UL (unsigned -1)
  */
-kthread_t *kthread_create(proc_t *proc, kthread_func_t func, long arg1,
-                          void *arg2)
+kthread_t *kthread_create(proc_t *proc, kthread_func_t func, long arg1, void *arg2)
 {
-
     kthread_t *new_thread = slab_obj_alloc(kthread_allocator);
     if (!new_thread) {
         return NULL;
     }
-
 
     char *stack = alloc_stack();
     if (!stack) {
@@ -89,20 +86,14 @@ kthread_t *kthread_create(proc_t *proc, kthread_func_t func, long arg1,
     new_thread->kt_state = KT_NO_STATE; 
     new_thread->kt_preemption_count = 0;
 
-
     list_link_init(&new_thread->kt_plink);
     list_link_init(&new_thread->kt_qlink);
-    
-
     list_init(&new_thread->kt_mutexes);
-
 
     context_setup(&new_thread->kt_ctx, func, arg1, arg2, 
                   stack, DEFAULT_STACK_SIZE, proc->p_pml4);
 
-
     list_insert_tail(&proc->p_threads, &new_thread->kt_plink);
-
     return new_thread;
 }
 
@@ -140,7 +131,6 @@ void kthread_destroy(kthread_t *thr)
     free_stack(thr->kt_kstack);
     if (list_link_is_linked(&thr->kt_plink))
         list_remove(&thr->kt_plink);
-
     slab_obj_free(kthread_allocator, thr);
 }
 

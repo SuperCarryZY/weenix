@@ -462,120 +462,108 @@ void pt_init()
 
 pt_t *clone_pt(pt_t *pt)
 {
+    dbg(DBG_PGTBL, "开始克隆页表(PT): 源地址=0x%p\n", pt);
     pt_t *clone = page_alloc();
-    dbg(DBG_PRINT, "cloning pt at 0x%p to 0x%p\n", pt, clone);
-    if (clone)
-    {
-        memcpy(clone, pt, PAGE_SIZE);
+    if (!clone) {
+        dbg(DBG_PGTBL, "克隆页表(PT)失败: 内存分配失败\n");
+        return NULL;
     }
+    dbg(DBG_PGTBL, "克隆页表(PT): 源地址=0x%p, 目标地址=0x%p\n", pt, clone);
+    memcpy(clone, pt, PAGE_SIZE);
+    dbg(DBG_PGTBL, "克隆页表(PT)完成\n");
     return clone;
 }
 
 pd_t *clone_pd(pd_t *pd)
 {
+    dbg(DBG_PGTBL, "开始克隆页目录(PD): 源地址=0x%p\n", pd);
     pd_t *clone = page_alloc();
-    dbg(DBG_PRINT, "cloning pd at 0x%p to 0x%p\n", pd, clone);
-    if (!clone)
-    {
+    if (!clone) {
+        dbg(DBG_PGTBL, "克隆页目录(PD)失败: 内存分配失败\n");
         return NULL;
     }
-    memset(clone, 0, PAGE_SIZE); // in case the clone fails, need to know what
-                                 // we have allocated
-    for (unsigned i = 0; i < PT_ENTRY_COUNT; i++)
-    {
-        // dbg(DBG_PRINT, "checking pd i = %u\n", i);
-        if (pd->phys[i])
-        {
-            if (IS_2MB_PAGE(pd->phys[i]))
-            {
+    dbg(DBG_PGTBL, "克隆页目录(PD): 源地址=0x%p, 目标地址=0x%p\n", pd, clone);
+    memset(clone, 0, PAGE_SIZE);
+    for (unsigned i = 0; i < PT_ENTRY_COUNT; i++) {
+        if (pd->phys[i]) {
+            if (IS_2MB_PAGE(pd->phys[i])) {
                 clone->phys[i] = pd->phys[i];
                 continue;
             }
-            pt_t *cloned_pt =
-                clone_pt((pt_t *)((pd->phys[i] & PAGE_MASK) + PHYS_OFFSET));
-            if (!cloned_pt)
-            {
+            dbg(DBG_PGTBL, "克隆页目录(PD)项[%u]: 开始克隆子页表\n", i);
+            pt_t *cloned_pt = clone_pt((pt_t *)((pd->phys[i] & PAGE_MASK) + PHYS_OFFSET));
+            if (!cloned_pt) {
+                dbg(DBG_PGTBL, "克隆页目录(PD)项[%u]失败: 子页表克隆失败\n", i);
                 return NULL;
             }
-            clone->phys[i] = (((uintptr_t)cloned_pt) - PHYS_OFFSET) |
-                             PAGE_FLAGS(pd->phys[i]);
-        }
-        else
-        {
+            clone->phys[i] = (((uintptr_t)cloned_pt) - PHYS_OFFSET) | PAGE_FLAGS(pd->phys[i]);
+            dbg(DBG_PGTBL, "克隆页目录(PD)项[%u]完成\n", i);
+        } else {
             clone->phys[i] = 0;
         }
     }
+    dbg(DBG_PGTBL, "克隆页目录(PD)完成\n");
     return clone;
 }
 
 pdp_t *clone_pdp(pdp_t *pdp)
 {
+    dbg(DBG_PGTBL, "开始克隆页目录指针(PDP): 源地址=0x%p\n", pdp);
     pdp_t *clone = page_alloc();
-    dbg(DBG_PRINT, "cloning pdp at 0x%p to 0x%p\n", pdp, clone);
-    if (!clone)
-    {
+    if (!clone) {
+        dbg(DBG_PGTBL, "克隆页目录指针(PDP)失败: 内存分配失败\n");
         return NULL;
     }
-    memset(clone, 0, PAGE_SIZE); // in case the clone fails, need to know what
-                                 // we have allocated
-    for (unsigned i = 0; i < PT_ENTRY_COUNT; i++)
-    {
-        // dbg(DBG_PRINT, "checking pdp i = %u\n", i);
-        if (pdp->phys[i])
-        {
-            if (IS_1GB_PAGE(pdp->phys[i]))
-            {
+    dbg(DBG_PGTBL, "克隆页目录指针(PDP): 源地址=0x%p, 目标地址=0x%p\n", pdp, clone);
+    memset(clone, 0, PAGE_SIZE);
+    for (unsigned i = 0; i < PT_ENTRY_COUNT; i++) {
+        if (pdp->phys[i]) {
+            if (IS_1GB_PAGE(pdp->phys[i])) {
                 clone->phys[i] = pdp->phys[i];
                 continue;
             }
-            pd_t *cloned_pd =
-                clone_pd((pd_t *)((pdp->phys[i] & PAGE_MASK) + PHYS_OFFSET));
-            if (!cloned_pd)
-            {
+            dbg(DBG_PGTBL, "克隆页目录指针(PDP)项[%u]: 开始克隆子页目录\n", i);
+            pd_t *cloned_pd = clone_pd((pd_t *)((pdp->phys[i] & PAGE_MASK) + PHYS_OFFSET));
+            if (!cloned_pd) {
+                dbg(DBG_PGTBL, "克隆页目录指针(PDP)项[%u]失败: 子页目录克隆失败\n", i);
                 return NULL;
             }
-            clone->phys[i] = (((uintptr_t)cloned_pd) - PHYS_OFFSET) |
-                             PAGE_FLAGS(pdp->phys[i]);
-        }
-        else
-        {
+            clone->phys[i] = (((uintptr_t)cloned_pd) - PHYS_OFFSET) | PAGE_FLAGS(pdp->phys[i]);
+            dbg(DBG_PGTBL, "克隆页目录指针(PDP)项[%u]完成\n", i);
+        } else {
             clone->phys[i] = 0;
         }
     }
+    dbg(DBG_PGTBL, "克隆页目录指针(PDP)完成\n");
     return clone;
 }
 
 pml4_t *clone_pml4(pml4_t *pml4, long include_user_mappings)
 {
+    dbg(DBG_PGTBL, "开始克隆页映射4级表(PML4): 源地址=0x%p, 包含用户映射=%ld\n", pml4, include_user_mappings);
     pml4_t *clone = page_alloc();
-    dbg(DBG_PRINT, "cloning pml4 at 0x%p to 0x%p\n", pml4, clone);
-    if (!clone)
-    {
+    if (!clone) {
+        dbg(DBG_PGTBL, "克隆页映射4级表(PML4)失败: 内存分配失败\n");
         return NULL;
     }
-    memset(clone, 0, PAGE_SIZE); // in case the clone fails, need to know what
-                                 // we have allocated
-    for (uintptr_t i = include_user_mappings ? 0 : PT_ENTRY_COUNT / 2;
-         i < PT_ENTRY_COUNT; i++)
-    {
-        // dbg(DBG_PRINT, "checking pml4 i = %u\n", i);
-        if (pml4->phys[i])
-        {
-            pdp_t *cloned_pdp =
-                clone_pdp((pdp_t *)((pml4->phys[i] & PAGE_MASK) + PHYS_OFFSET));
-            if (!cloned_pdp)
-            {
+    dbg(DBG_PGTBL, "克隆页映射4级表(PML4): 源地址=0x%p, 目标地址=0x%p\n", pml4, clone);
+    memset(clone, 0, PAGE_SIZE);
+    for (uintptr_t i = include_user_mappings ? 0 : PT_ENTRY_COUNT / 2; i < PT_ENTRY_COUNT; i++) {
+        if (pml4->phys[i]) {
+            dbg(DBG_PGTBL, "克隆页映射4级表(PML4)项[%lu]: 开始克隆子页目录指针\n", i);
+            pdp_t *cloned_pdp = clone_pdp((pdp_t *)((pml4->phys[i] & PAGE_MASK) + PHYS_OFFSET));
+            if (!cloned_pdp) {
+                dbg(DBG_PGTBL, "克隆页映射4级表(PML4)项[%lu]失败: 子页目录指针克隆失败\n", i);
                 pt_destroy(clone);
                 return NULL;
             }
-            clone->phys[i] = (((uintptr_t)cloned_pdp) - PHYS_OFFSET) |
-                             PAGE_FLAGS(pml4->phys[i]);
-        }
-        else
-        {
+            clone->phys[i] = (((uintptr_t)cloned_pdp) - PHYS_OFFSET) | PAGE_FLAGS(pml4->phys[i]);
+            dbg(DBG_PGTBL, "克隆页映射4级表(PML4)项[%lu]完成\n", i);
+        } else {
             clone->phys[i] = 0;
         }
     }
+    dbg(DBG_PGTBL, "克隆页映射4级表(PML4)完成\n");
     return clone;
 }
 
