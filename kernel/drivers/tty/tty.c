@@ -69,8 +69,25 @@ void tty_init()
  */
 ssize_t tty_read(chardev_t *cdev, size_t pos, void *buf, size_t count)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: tty_read");
-    return -1;
+    tty_t *tty = cd_to_tty(cdev);
+    
+    // Lock the read mutex and set interrupt level to prevent preemption
+    kmutex_lock(&tty->tty_read_mutex);
+    uint8_t old_ipl = intr_setipl(INTR_KEYBOARD);
+    
+    // Wait until there are characters available to read
+    long ret = ldisc_wait_read(&tty->tty_ldisc);
+    if (ret < 0){
+        intr_setipl(old_ipl);
+        kmutex_unlock(&tty->tty_read_mutex);
+        return ret;
+    }
+    
+    // Read from the line discipline buffer and restore interrupt level
+    size_t bytes_read = ldisc_read(&tty->tty_ldisc, (char *)buf, count);
+    intr_setipl(old_ipl);
+    kmutex_unlock(&tty->tty_read_mutex);
+    return bytes_read;
 }
 
 /**
@@ -88,8 +105,17 @@ ssize_t tty_read(chardev_t *cdev, size_t pos, void *buf, size_t count)
  */
 ssize_t tty_write(chardev_t *cdev, size_t pos, const void *buf, size_t count)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: tty_write");
-    return -1;
+    tty_t *tty = cd_to_tty(cdev);
+    
+    // Lock the write mutex and set interrupt level to prevent preemption
+    kmutex_lock(&tty->tty_write_mutex);
+    uint8_t old_ipl = intr_setipl(INTR_KEYBOARD);
+    
+    // Write to the virtual terminal and restore interrupt level
+    size_t bytes_written = vterminal_write(&tty->tty_vterminal, (const char *)buf, count);
+    intr_setipl(old_ipl);
+    kmutex_unlock(&tty->tty_write_mutex);
+    return bytes_written;
 }
 
 static void tty_receive_char_multiplexer(uint8_t c)

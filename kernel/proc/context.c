@@ -1,3 +1,4 @@
+
 #include "proc/context.h"
 #include "proc/kthread.h"
 #include <main/cpuid.h>
@@ -14,20 +15,12 @@ typedef struct context_initial_func_args
 
 static void __context_thread_initial_func(context_initial_func_args_t args)
 {
-    dbg(DBG_THR, "线程初始化函数开始执行\n");
-    
     preemption_reset();
     apic_setipl(IPL_LOW);
     intr_enable();
-    dbg(DBG_THR, "中断已启用\n");
 
-    dbg(DBG_THR, "调用线程函数\n");
     void *result = (args.func)(args.arg1, args.arg2);
-    dbg(DBG_THR, "线程函数返回: %p\n", result);
-    
-    dbg(DBG_THR, "准备调用 kthread_exit\n");
     kthread_exit(result);
-    dbg(DBG_THR, "kthread_exit 返回，这不应该发生\n");
 
     panic("\nReturned from kthread_exit.\n");
 }
@@ -55,9 +48,6 @@ void context_setup_raw(context_t *c, void (*func)(), void *kstack,
 void context_setup(context_t *c, context_func_t func, long arg1, void *arg2,
                    void *kstack, size_t kstacksz, pml4_t *pml4)
 {
-    dbg(DBG_THR, "开始设置线程上下文: func=%p, arg1=%ld, arg2=%p\n", func, arg1, arg2);
-    dbg(DBG_THR, "栈信息: kstack=%p, kstacksz=%zu\n", kstack, kstacksz);
-    
     KASSERT(NULL != pml4);
     KASSERT(PAGE_ALIGNED(kstack));
 
@@ -79,11 +69,6 @@ void context_setup(context_t *c, context_func_t func, long arg1, void *arg2,
 
     c->c_rbp = c->c_rsp;
     c->c_rip = (uintptr_t)__context_thread_initial_func;
-    
-    dbg(DBG_THR, "线程上下文设置完成: rip=%p, rsp=%p, rbp=%p\n", c->c_rip, c->c_rsp, c->c_rbp);
-    dbg(DBG_THR, "栈内容: func=%p, arg1=%ld, arg2=%p\n", *(context_func_t *)(c->c_rsp + sizeof(uintptr_t)), 
-        *(long *)(c->c_rsp + sizeof(uintptr_t) + sizeof(context_func_t)), 
-        *(void **)(c->c_rsp + sizeof(uintptr_t) + sizeof(context_func_t) + sizeof(long)));
 }
 
 /*
@@ -112,10 +97,6 @@ void context_make_active(context_t *c)
 
 void context_switch(context_t *oldc, context_t *newc)
 {
-    dbg(DBG_THR, "开始上下文切换: oldc=%p, newc=%p\n", oldc, newc);
-    dbg(DBG_THR, "旧上下文: rip=%p, rsp=%p, pml4=%p\n", oldc->c_rip, oldc->c_rsp, oldc->c_pml4);
-    dbg(DBG_THR, "新上下文: rip=%p, rsp=%p, pml4=%p\n", newc->c_rip, newc->c_rsp, newc->c_pml4);
-    
     gdt_set_kernel_stack(
         (void *)((uintptr_t)newc->c_kstack + newc->c_kstacksz));
 
@@ -133,8 +114,6 @@ void context_switch(context_t *oldc, context_t *newc)
 
     KASSERT(curthr_paddr == new_curthr_paddr);
     KASSERT(prev_curthr == curthr);
-
-    dbg(DBG_THR, "保存旧上下文并加载新上下文\n");
 
     /*
      * Save the current value of the stack pointer and the frame pointer into
@@ -168,6 +147,4 @@ void context_switch(context_t *oldc, context_t *newc)
         "popfq"                 /* restore RFLAGS */
         : "=m"(oldc->c_rsp), "=m"(oldc->c_rip)
         : "m"(newc->c_rsp), "m"(newc->c_rip));
-        
-    dbg(DBG_THR, "上下文切换完成: oldc=%p, newc=%p\n", oldc, newc);
 }

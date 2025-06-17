@@ -16,7 +16,19 @@
  */
 void ldisc_init(ldisc_t *ldisc)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: ldisc_init");
+    // Initialize the circular buffer indices
+    ldisc->ldisc_head = 0;
+    ldisc->ldisc_tail = 0;
+    ldisc->ldisc_cooked = 0;
+    
+    // Initialize the buffer to be empty
+    ldisc->ldisc_full = 0;
+    
+    // Initialize the read queue for threads waiting for data
+    sched_queue_init(&ldisc->ldisc_read_queue);
+    
+    // Clear the buffer
+    memset(ldisc->ldisc_buffer, 0, LDISC_BUFFER_SIZE);
 }
 
 /**
@@ -32,8 +44,19 @@ void ldisc_init(ldisc_t *ldisc)
  */
 long ldisc_wait_read(ldisc_t *ldisc)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: ldisc_wait_read");
-    return -1;
+    long ret = 0;
+    
+    // Sleep until there are new characters to be read or the ldisc is full
+    while (!ret && ldisc->ldisc_tail == ldisc->ldisc_cooked && 
+           !ldisc->ldisc_full)
+    {
+        ret = sched_cancellable_sleep_on(&ldisc->ldisc_read_queue);
+        if (ret == -EINTR){
+            return -EINTR;
+        }   
+    }
+    
+    return ret;
 }
 
 /**
@@ -53,8 +76,35 @@ long ldisc_wait_read(ldisc_t *ldisc)
  */
 size_t ldisc_read(ldisc_t *ldisc, char *buf, size_t count)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: ldisc_read");
-    return 0;
+    // If no characters available to read, return 0
+    if (ldisc->ldisc_tail == ldisc->ldisc_cooked && !ldisc->ldisc_full){
+        return 0;
+    }
+    
+    size_t read = 0;
+    while (read < count){
+        // Copy character from ldisc buffer to output buffer
+        buf[read++] = ldisc->ldisc_buffer[ldisc->ldisc_tail];
+        ldisc->ldisc_tail = MOD_POW_2(ldisc->ldisc_tail + 1, LDISC_BUFFER_SIZE);
+        // if (buf[read - 1] == LF) {
+        //     break;
+        // }
+
+        // Case for EOT
+        if (buf[read - 1] == EOT){
+            read--;
+            break;
+        }
+        
+        // Case for cooked buffer being full
+        if (ldisc->ldisc_tail == ldisc->ldisc_cooked)        {
+            break;
+        }
+    }
+    
+    // Update full flag
+    ldisc->ldisc_full = 0;
+    return read;
 }
 
 /**
@@ -105,7 +155,54 @@ size_t ldisc_read(ldisc_t *ldisc, char *buf, size_t count)
  */
 void ldisc_key_pressed(ldisc_t *ldisc, char c)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: ldisc_key_pressed");
+    // Get the vterminal for this line discipline
+    vterminal_t *vt = &ldisc_to_tty(ldisc)->tty_vterminal;
+    
+    // Handle backspace
+    if (c == BS){
+        if (ldisc->ldisc_cooked != ldisc->ldisc_head){
+            ldisc->ldisc_head = MOD_POW_2(ldisc->ldisc_head - 1, LDISC_BUFFER_SIZE);
+            vterminal_write(vt, "\b", 1);
+        }
+        return;
+    }
+    
+    // Handle Ctrl-C
+    if (c == ETX){
+        ldisc->ldisc_head = ldisc->ldisc_cooked;
+        c = LF;
+        vterminal_write(vt, "^C", 2);
+    }
+    
+    // Case for buffer being full
+    if (ldisc->ldisc_full){
+        return;
+    }
+    
+    // Case for buffer being almost full
+    if ((MOD_POW_2(ldisc->ldisc_head + 1, LDISC_BUFFER_SIZE) == ldisc->ldisc_tail) &&
+        (c != LF && c != EOT)){
+        return;
+    }
+    
+    // Add character to buffer and update head and full flag
+    ldisc->ldisc_buffer[ldisc->ldisc_head] = c;
+    ldisc->ldisc_head = MOD_POW_2(ldisc->ldisc_head + 1, LDISC_BUFFER_SIZE);
+    ldisc->ldisc_full = (ldisc->ldisc_head == ldisc->ldisc_tail);
+    
+    // Case for new line or EOT
+    if (c == LF || c == EOT){
+        ldisc->ldisc_cooked = ldisc->ldisc_head;
+        sched_wakeup_on(&ldisc->ldisc_read_queue, NULL);
+        
+        if (c == LF)
+        {
+            vterminal_write(vt, "\n", 1);
+        }
+    }
+    else{
+        vterminal_key_pressed(vt);
+    }
 }
 
 /**
@@ -117,6 +214,24 @@ void ldisc_key_pressed(ldisc_t *ldisc, char c)
  */
 size_t ldisc_get_current_line_raw(ldisc_t *ldisc, char *s)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: ldisc_get_current_line_raw");
-    return 0;
+    // Calculate the length of the raw portion
+    size_t len = MOD_POW_2(ldisc->ldisc_head - ldisc->ldisc_cooked, LDISC_BUFFER_SIZE);
+    
+    // Case for no raw data
+    if (len == 0){
+        return 0;
+    }
+    
+    // Case for raw data being contiguous
+    if (ldisc->ldisc_head > ldisc->ldisc_cooked){
+        memcpy(s, ldisc->ldisc_buffer + ldisc->ldisc_cooked, 
+               ldisc->ldisc_head - ldisc->ldisc_cooked);
+    } else{
+        memcpy(s, ldisc->ldisc_buffer + ldisc->ldisc_cooked,
+               LDISC_BUFFER_SIZE - ldisc->ldisc_cooked);
+        memcpy(s + (LDISC_BUFFER_SIZE - ldisc->ldisc_cooked),
+               ldisc->ldisc_buffer, ldisc->ldisc_head);
+    }
+    
+    return len;
 }

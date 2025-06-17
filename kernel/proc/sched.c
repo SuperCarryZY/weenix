@@ -159,19 +159,20 @@ void sched_init(void)
  */
 long sched_cancellable_sleep_on(ktqueue_t *queue)
 {
-    if (curthr->kt_cancelled) {
+    // Check if the thread was cancelled before sleeping
+    if (curthr->kt_cancelled)
+    {
         return -EINTR;
     }
-    
+
+    // Set the thread state to cancellable sleep
     curthr->kt_state = KT_SLEEP_CANCELLABLE;
     
+    // Handle the switch to the new queue
     sched_switch(queue);
-    
-    if (curthr->kt_cancelled) {
-        return -EINTR;
-    }
-    
-    return 0;
+
+    // Check if the thread was cancelled after sleeping
+    return curthr->kt_cancelled ? -EINTR : 0;
 }
 
 /*
@@ -182,9 +183,13 @@ long sched_cancellable_sleep_on(ktqueue_t *queue)
  */
 void sched_cancel(kthread_t *thr)
 {
+    // Mark the thread as cancelled
     thr->kt_cancelled = 1;
-    
-    if (thr->kt_state == KT_SLEEP_CANCELLABLE && thr->kt_wchan) {
+
+    // Remove the thread from the queue and make it runnable if it is in cancellable sleep
+    if (thr->kt_state == KT_SLEEP_CANCELLABLE)
+    {
+        KASSERT(thr->kt_wchan);
         ktqueue_remove(thr->kt_wchan, thr);
         sched_make_runnable(thr);
     }
@@ -226,17 +231,24 @@ void sched_cancel(kthread_t *thr)
  */
 void sched_switch(ktqueue_t *queue)
 {
-    KASSERT(curthr->kt_state != KT_ON_CPU && "Current thread state must not be KT_ON_CPU");
+    KASSERT(curthr->kt_state != KT_ON_CPU);
     
+    // Disable interrupts and save the original IPL
     intr_disable();
     uint8_t old_ipl = intr_setipl(IPL_LOW);
     
+    // Set the current core's queue to the new queue
     curcore.kc_queue = queue;
     
+    // Save the current thread's context
     last_thread_context = &curthr->kt_ctx;
     
+    // Switch to the core's context
     context_switch(&curthr->kt_ctx, &curcore.kc_ctx);
+
+    KASSERT(curthr);
     
+    // Restore the original IPL and enable interrupts
     intr_setipl(old_ipl);
     intr_enable();
 }
@@ -264,14 +276,14 @@ void sched_yield()
  */
 void sched_make_runnable(kthread_t *thr)
 {
-    KASSERT(thr != curthr && "Cannot make the current thread runnable");
-    KASSERT(thr->kt_state != KT_ON_CPU && "Thread is already running");
+    KASSERT(thr != curthr);
     
+    // Mask interrupts to protect queue operations
     uint8_t old_ipl = intr_setipl(IPL_HIGH);
-    
+
     thr->kt_state = KT_RUNNABLE;
-    ktqueue_enqueue(&kt_runq, thr);
     
+    ktqueue_enqueue(&kt_runq, thr);
     intr_setipl(old_ipl);
 }
 
@@ -290,13 +302,11 @@ void sched_make_runnable(kthread_t *thr)
  */
 void sched_sleep_on(ktqueue_t *q)
 {
+    // Set the thread state to uninterruptible sleep
     uint8_t old_ipl = intr_setipl(IPL_HIGH);
-    
     curthr->kt_state = KT_SLEEP;
-    
-    sched_switch(q);
-    
     intr_setipl(old_ipl);
+    sched_switch(q);
 }
 
 /*
@@ -312,17 +322,22 @@ void sched_sleep_on(ktqueue_t *q)
  */
 void sched_wakeup_on(ktqueue_t *q, kthread_t **ktp)
 {
-    if (sched_queue_empty(q)) {
+    // Dequeue a thread from the queue
+    kthread_t *woken_thread = ktqueue_dequeue(q);
+    
+    // If queue was empty, do nothing
+    if (!woken_thread) {
+        if (ktp) {
+            *ktp = NULL;
+        }
         return;
     }
     
-    kthread_t *thr = ktqueue_dequeue(q);
-    
+    // Set the output parameter if provided and make the thread runnable
     if (ktp) {
-        *ktp = thr;
+        *ktp = woken_thread;
     }
-    
-    sched_make_runnable(thr);
+    sched_make_runnable(woken_thread);
 }
 
 /*
@@ -330,11 +345,11 @@ void sched_wakeup_on(ktqueue_t *q, kthread_t **ktp)
  */
 void sched_broadcast_on(ktqueue_t *q)
 {
-    while (!sched_queue_empty(q)) {
-        kthread_t *thr = ktqueue_dequeue(q);
-        if (!thr->kt_cancelled) {
-            sched_make_runnable(thr);
-        }
+    kthread_t *woken_thread;
+    
+    // Wake up all threads in the queue and make them runnable
+    while ((woken_thread = ktqueue_dequeue(q)) != NULL) {
+        sched_make_runnable(woken_thread);
     }
 }
 
@@ -355,14 +370,11 @@ void core_switch()
 {
     while (1)
     {
-        dbg(DBG_THR, "核心切换循环开始: curthr=%p, curproc=%p\n", curthr, curproc);
-        
         KASSERT(!intr_enabled());
         KASSERT(!curthr || curthr->kt_state != KT_ON_CPU);
 
         if (curcore.kc_queue)
         {
-            dbg(DBG_THR, "将当前线程加入队列: curthr=%p, state=%d\n", curthr, curthr ? curthr->kt_state : -1);
             ktqueue_enqueue(curcore.kc_queue, curthr);
         }
 
@@ -377,17 +389,18 @@ void core_switch()
             if (next_thread)
                 break;
 
-            dbg(DBG_THR, "等待可运行线程\n");
             intr_wait();
             intr_disable();
         }
 
-        dbg(DBG_THR, "选择下一个线程: proc=%d, state=%d\n", next_thread->kt_proc->p_pid, next_thread->kt_state);
-
         KASSERT(next_thread->kt_state == KT_RUNNABLE);
         KASSERT(next_thread->kt_proc);
 
+        // if (curcore.kc_id != next_thread->kt_recent_core)
+        // {
         map_in_core_specific_data(next_thread->kt_ctx.c_pml4);
+            // next_thread->kt_recent_core = curcore.kc_id;
+        // }
 
         uintptr_t mapped_paddr = pt_virt_to_phys_helper(
             next_thread->kt_ctx.c_pml4, (uintptr_t)&next_thread);
@@ -398,10 +411,6 @@ void core_switch()
         curthr = next_thread;
         curthr->kt_state = KT_ON_CPU;
         curproc = curthr->kt_proc;
-        
-        dbg(DBG_THR, "切换到新线程: proc=%d, state=%d\n", curproc->p_pid, curthr->kt_state);
         context_switch(&curcore.kc_ctx, &curthr->kt_ctx);
-        
-        dbg(DBG_THR, "核心切换完成: curthr=%p, curproc=%p\n", curthr, curproc);
     }
 }

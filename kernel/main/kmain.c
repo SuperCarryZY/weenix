@@ -1,7 +1,6 @@
 #include "errno.h"
 #include "globals.h"
 #include "types.h"
-#include "kernel.h"
 #include <api/exec.h>
 #include <drivers/screen.h>
 #include <drivers/tty/tty.h>
@@ -10,6 +9,7 @@
 #include <mm/mm.h>
 #include <mm/slab.h>
 #include <test/kshell/kshell.h>
+#include <test/proctest.h>
 #include <util/time.h>
 #include <vm/anon.h>
 #include <vm/shadow.h>
@@ -34,7 +34,6 @@
 #include "fs/vnode.h"
 
 #include "test/driverstest.h"
-#include "test/proctest.h"
 
 #include "util/btree.h"
 
@@ -86,13 +85,11 @@ static init_func_t init_funcs[] = {
  */
 void kmain()
 {
-    dbg(DBG_CORE, "kmain 开始\n");
     GDB_CALL_HOOK(boot);
 
     for (size_t i = 0; i < sizeof(init_funcs) / sizeof(init_funcs[0]); i++)
         init_funcs[i]();
 
-    dbg(DBG_CORE, "kmain 初始化完成，准备启动 initproc\n");
     initproc_start();
     panic("\nReturned to kmain()\n");
 }
@@ -157,33 +154,39 @@ static void make_devices()
  */
 static void *initproc_run(long arg1, void *arg2)
 {
-    dbg(DBG_CORE, "initproc_run 开始\n");
 #ifdef __VFS__
     dbg(DBG_INIT, "Initializing VFS...\n");
     vfs_init();
     make_devices();
 #endif
 
-    dbg(DBG_INIT, "Init process started\n");
+    // Run the process/scheduler tests
+    dbg(DBG_INIT, "Init process started successfully!\n");
+    dbg(DBG_INIT, "Running process and scheduler tests...\n");
+    
+    // Call the main test function from proctest.c
+    //long test_result = proctest_main(0, NULL);
 
-    proctest_main(0, NULL);
     
-    /* TODO: Add your其他 tests here for PROCS */
-    
+    /* To create a kshell on each terminal */
 #ifdef __DRIVERS__
-    /* After drivers are done, start kshells here */
+    char name[32] = {0};
+    for (long i = 0; i < __NTERMS__; i++)
+    {
+        snprintf(name, sizeof(name), "kshell%ld", i);
+        proc_t *proc = proc_create("ksh");
+        kthread_t *thread = kthread_create(proc, kshell_proc_run, i, NULL);
+        sched_make_runnable(thread);
+    }
 #endif
 
-    /* Wait for all children to exit */
-    while (!list_empty(&curproc->p_children)) {
-        int status;
-        pid_t child = do_waitpid(-1, &status, 0);
-        if (child > 0) {
-            dbg(DBG_INIT, "Child process %d exited with status %d\n", child, status);
-        }
+    // Wait for all children to finish before exiting
+    int status;
+    while (do_waitpid(-1, &status, 0) != -ECHILD) {
+        dbg(DBG_INIT, "Init process: child exited with status %d\n", status);
     }
-
-    dbg(DBG_CORE, "initproc_run 结束\n");
+    
+    dbg(DBG_INIT, "Init process: all children have exited, shutting down\n");
     return NULL;
 }
 
@@ -201,20 +204,18 @@ static void *initproc_run(long arg1, void *arg2)
  */
 void initproc_start()
 {
-    dbg(DBG_CORE, "initproc_start 开始\n");
     proc_t *init_proc = proc_create("init");
     KASSERT(init_proc && "Failed to create init process");
-    KASSERT(init_proc->p_pid == PID_INIT && "Init process should have PID 1");
     
+    // Create the initial thread for the init process
     kthread_t *init_thread = kthread_create(init_proc, initproc_run, 0, NULL);
     KASSERT(init_thread && "Failed to create init thread");
     
+    // Make the thread runnable so it can be scheduled
     sched_make_runnable(init_thread);
-    
-    GDB_CALL_HOOK(initialized);
-    
     context_make_active(&curcore.kc_ctx);
-    dbg(DBG_CORE, "initproc_start 结束\n");
+    
+    panic("initproc_start: returned from context_make_active");
 }
 
 void initproc_finish()

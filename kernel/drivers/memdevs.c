@@ -43,7 +43,19 @@ chardev_ops_t zero_dev_ops = {.read = zero_read,
  */
 void memdevs_init()
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: memdevs_init");
+    // Create and initialize null device
+    chardev_t *null_dev = kmalloc(sizeof(chardev_t));
+    null_dev->cd_id = MEM_NULL_DEVID;
+    null_dev->cd_ops = &null_dev_ops;
+    list_link_init(&null_dev->cd_link);
+    chardev_register(null_dev);
+    
+    // Create and initialize zero device
+    chardev_t *zero_dev = kmalloc(sizeof(chardev_t));
+    zero_dev->cd_id = MEM_ZERO_DEVID;
+    zero_dev->cd_ops = &zero_dev_ops;
+    list_link_init(&zero_dev->cd_link);
+    chardev_register(zero_dev);
 }
 
 /**
@@ -58,8 +70,8 @@ void memdevs_init()
  */
 static ssize_t null_read(chardev_t *dev, size_t pos, void *buf, size_t count)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: null_read");
-    return -ENOMEM;
+    // Reading from null device always returns 0 bytes (EOF)
+    return 0;
 }
 
 /**
@@ -76,8 +88,8 @@ static ssize_t null_read(chardev_t *dev, size_t pos, void *buf, size_t count)
 static ssize_t null_write(chardev_t *dev, size_t pos, const void *buf,
                           size_t count)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: null_write");
-    return -ENOMEM;
+    // Writing to null device always succeeds and discards all data
+    return count;
 }
 
 /**
@@ -93,8 +105,9 @@ static ssize_t null_write(chardev_t *dev, size_t pos, const void *buf,
  */
 static ssize_t zero_read(chardev_t *dev, size_t pos, void *buf, size_t count)
 {
-    NOT_YET_IMPLEMENTED("DRIVERS: zero_read");
-    return 0;
+    // Fill buffer with zeros
+    memset(buf, 0, count);
+    return count;
 }
 
 /**
@@ -104,6 +117,14 @@ static ssize_t zero_read(chardev_t *dev, size_t pos, void *buf, size_t count)
  */
 static long zero_mmap(vnode_t *file, mobj_t **ret)
 {
-    NOT_YET_IMPLEMENTED("VM: zero_mmap");
-    return -1;
+    // Create an anonymous memory object for /dev/zero mmap
+    mobj_t *anon_obj = anon_create();
+    if (!anon_obj){
+        return -ENOMEM;
+    }
+    
+    // Keep the anonymous object locked when returning
+    mobj_lock(anon_obj);
+    *ret = anon_obj;
+    return 0;
 }
